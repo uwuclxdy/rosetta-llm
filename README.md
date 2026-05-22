@@ -40,7 +40,7 @@ docker run -p 7860:7860 \
   -v ~/.rosetta-llm/config.json:/app/config.json \
   -e ANTHROPIC_API_KEY=sk-ant-... \
   -e OPENAI_API_KEY=sk-... \
-  ghcr.io/lokesh-chimakurthi/rosetta-llm:main
+  ghcr.io/lokesh-chimakurthi/rosetta-llm:latest
 ```
 
 ### From source
@@ -93,6 +93,7 @@ Rosetta is a fully compatible [Claude Code LLM gateway](https://code.claude.com/
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:7860
 export ANTHROPIC_AUTH_TOKEN=sk-proxy-XXXX   # if proxy auth is enabled
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 ```
 
 Or in Claude Code settings (`~/.claude/settings.json`):
@@ -101,7 +102,8 @@ Or in Claude Code settings (`~/.claude/settings.json`):
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:7860",
-    "ANTHROPIC_AUTH_TOKEN": "sk-proxy-XXXX"
+    "ANTHROPIC_AUTH_TOKEN": "sk-proxy-XXXX",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
   }
 }
 ```

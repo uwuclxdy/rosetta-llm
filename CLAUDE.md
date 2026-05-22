@@ -25,7 +25,7 @@ rosetta-llm --config /path/to/config.json --port 7860
 
 # Docker
 docker run -p 7860:7860 -v ~/.rosetta-llm/config.json:/app/config.json \
-  ghcr.io/lokesh-chimakurthi/rosetta-llm:main
+  ghcr.io/lokesh-chimakurthi/rosetta-llm:latest
 ```
 
 ## Architecture
