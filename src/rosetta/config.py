@@ -46,6 +46,7 @@ class ProviderConfig(BaseModel):
     api_key: str | None = None
     api_key_env: str | None = None
     extra_headers: dict[str, str] = Field(default_factory=dict)
+    extra_headers_env: dict[str, str] = Field(default_factory=dict)
     timeout: TimeoutConfig = Field(default_factory=TimeoutConfig)
     models: list[ModelConfig | Literal["*"]] = Field(default_factory=list)
     models_ttl_seconds: int = 300
@@ -59,6 +60,32 @@ class ProviderConfig(BaseModel):
             self.api_key = key
         if self.api_key is None:
             raise ValueError("Provider requires api_key or api_key_env")
+        return self
+
+    @model_validator(mode="after")
+    def resolve_extra_headers_env(self) -> ProviderConfig:
+        """Resolve extra_headers_env entries from the environment into extra_headers.
+
+        Mirrors the api_key/api_key_env convention. Each entry maps a header
+        name to an env var name; the env var must be set and non-empty, else
+        we raise. A header name declared in BOTH extra_headers and
+        extra_headers_env is a config error (avoids silent precedence wins).
+        """
+        if not self.extra_headers_env:
+            return self
+        resolved: dict[str, str] = {}
+        for header_name, env_var in self.extra_headers_env.items():
+            if header_name in self.extra_headers:
+                raise ValueError(
+                    f"Header '{header_name}' is defined in both extra_headers "
+                    f"and extra_headers_env; pick one."
+                )
+            value = os.environ.get(env_var)
+            if not value:
+                raise ValueError(f"Environment variable {env_var} is not set")
+            resolved[header_name] = value
+        # Merge resolved env headers into the literal extra_headers dict.
+        self.extra_headers = {**resolved, **self.extra_headers}
         return self
 
     @property
@@ -75,7 +102,7 @@ class ProxyConfig(BaseModel):
 
 
 class Config(BaseModel):
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # noqa: S104 - all-interfaces bind is intentional for Docker deployments
     port: int = 7860
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     log_level: Literal["debug", "info", "warning", "error"] = "info"
