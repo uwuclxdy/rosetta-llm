@@ -221,3 +221,51 @@ def test_chat_stream_passthrough(client: TestClient) -> None:
             chunks = b"".join(r.iter_bytes())
     assert b"[DONE]" in chunks
     assert b"hi" in chunks
+
+
+def test_env_resolved_custom_header_reaches_upstream() -> None:
+    """A header declared via extra_headers_env must be sent upstream after env resolution."""
+    os.environ["UP_KEY"] = "sk-up"
+    os.environ["ABC_SECRET_HEADER"] = "secret-from-env"
+    cfg = Config.model_validate(
+        {
+            "providers": {
+                "abc": {
+                    "format": "openai_chat",
+                    "base_url": "https://upstream.test/v1",
+                    "api_key_env": "UP_KEY",
+                    "extra_headers": {"X-Literal-Header": "literal-val"},
+                    "extra_headers_env": {"X-Secret-Header": "ABC_SECRET_HEADER"},
+                    "models": [{"id": "m1"}],
+                },
+            },
+        }
+    )
+    app = create_app(cfg)
+    with TestClient(app) as c:
+        upstream_resp = {
+            "id": "chatcmpl-h",
+            "object": "chat.completion",
+            "model": "m1",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        with respx.mock(base_url="https://upstream.test/v1") as mock:
+            route = mock.post("/chat/completions").mock(
+                return_value=httpx.Response(200, json=upstream_resp)
+            )
+            r = c.post(
+                "/v1/chat/completions",
+                json={"model": "abc/m1", "messages": [{"role": "user", "content": "hi"}]},
+            )
+    assert route.called, "should have hit /chat/completions"
+    assert r.status_code == 200
+    sent_headers = route.calls.last.request.headers
+    assert sent_headers["x-secret-header"] == "secret-from-env"
+    assert sent_headers["x-literal-header"] == "literal-val"

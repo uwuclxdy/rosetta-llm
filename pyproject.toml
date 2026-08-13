@@ -1,6 +1,6 @@
 [project]
 name = "rosetta-llm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Multi-format bidirectional LLM proxy — translates between OpenAI Chat, OpenAI Responses, and Anthropic Messages"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -45,8 +45,37 @@ target-version = "py313"
 line-length = 99
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
-ignore = ["E501"]
+extend-select = [
+    "F",        # Pyflakes rules
+    "W",        # PyCodeStyle warnings
+    "E",        # PyCodeStyle errors
+    "I",        # Sort imports properly
+    "UP",       # Warn if certain things can changed due to newer Python versions
+    "C4",       # Catch incorrect use of comprehensions, dict, list, etc
+    "FA",       # Enforce from __future__ import annotations
+    "ISC",      # Good use of string concatenation
+    "ICN",      # Use common import conventions
+    "RET",      # Good return practices
+    "SIM",      # Common simplification rules
+    "ASYNC",    # async correctness
+    "TID",      # Some good import practices
+    "RUF",      # Ruff-specific rules
+    "PTH",      # Use pathlib instead of os.path
+    "NPY",      # Some numpy-specific things
+    "FURB",     # Suggest more idiomatic Python patterns
+    "B",        # Bugbear
+    "PT",       # Pytest rules
+    "S",        # flake8-bandit security rules
+    "FAST",     # Fastapi rules
+]
+ignore = [
+    "PLR0913",     # many-args: DI constructors legitimately take several deps
+    "PLR2004",     # magic-value: noisy in tests and thresholds
+    "E501"
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "PLR0913", "N802", "S101", "S105", "S106"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["rosetta"]
