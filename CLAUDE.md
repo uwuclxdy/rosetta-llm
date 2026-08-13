@@ -109,6 +109,7 @@ On inference, the `claude-code/` prefix is stripped and the model resolves norma
       "base_url": "https://...",
       "api_key": "sk-..." or "api_key_env": "ENV_VAR",
       "extra_headers": {},
+      "extra_headers_env": {},
       "timeout": {"connect": 30, "read": 600},
       "models": [{"id": "model-name", "upstream_name": "...", "supports": {...}, "thinking_budget_default": 12288}],
       "models_ttl_seconds": 300

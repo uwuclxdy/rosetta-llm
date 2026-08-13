@@ -43,9 +43,17 @@
       "api_key": "sk-...",
       // "api_key_env": "ABC_API_KEY",
 
-      // Optional headers merged into every upstream request
+      // Optional headers merged into every upstream request.
       "extra_headers": {
         "X-Custom": "value"
+      },
+
+      // Optional headers whose values are secrets — resolved from env vars
+      // at startup. Each entry maps header name -> env var name.
+      // The env var MUST be set and non-empty, or startup fails.
+      // A header name must NOT appear in both extra_headers and extra_headers_env.
+      "extra_headers_env": {
+        "X-Secret-Header": "ABC_SECRET_HEADER"
       },
 
       // Connection timeouts (seconds). Defaults to 30 connect / 600 read.
