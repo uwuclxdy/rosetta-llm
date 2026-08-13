@@ -2,7 +2,7 @@
 
 This is an approximation. Anthropic uses its own tokenizer; tiktoken's
 o200k_base is an OpenAI-family encoding. Real counts can differ by
-~5–15%. Use this only when an upstream count_tokens isn't available.
+~5-15%. Use this only when an upstream count_tokens isn't available.
 """
 
 from __future__ import annotations

@@ -55,9 +55,7 @@ _MAX_LOGGED_BODY = 8192
 
 
 def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
-    return {
-        k: ("***" if k in _SENSITIVE_HEADERS else v) for k, v in headers.items()
-    }
+    return {k: ("***" if k in _SENSITIVE_HEADERS else v) for k, v in headers.items()}
 
 
 async def _buffer_body(receive: Receive) -> tuple[bytes, Receive]:
@@ -75,7 +73,9 @@ async def _buffer_body(receive: Receive) -> tuple[bytes, Receive]:
             replayed = [message]
             body = b"".join(chunks)
 
-            async def _replay_other() -> dict[str, Any]:
+            async def _replay_other(
+                replayed: list[dict[str, Any]] = replayed,
+            ) -> dict[str, Any]:
                 return replayed.pop(0) if replayed else {"type": "http.disconnect"}
 
             return body, _replay_other

@@ -119,8 +119,8 @@ async def _try_fetch(client: Any, path: str) -> list[dict[str, Any]] | None:
         while has_more and last_id:
             page, has_more, last_id = await _fetch_page(client, path, after_id=last_id)
             entries.extend(page)
-        return entries if entries else None
-    except Exception:  # noqa: BLE001
+        return entries or None
+    except Exception:
         return None
 
 
@@ -285,7 +285,7 @@ async def refresh_models(config: Any, upstream: UpstreamClient, snapshot: dict[s
         total = len(oai)
         elapsed = time.monotonic() - started
         log.info("models_refreshed", total=total, elapsed_ms=round(elapsed * 1000))
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("models_refresh_failed")
 
 
