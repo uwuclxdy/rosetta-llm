@@ -193,9 +193,7 @@ async def _passthrough(
     if is_stream:
         gen = upstream.stream(provider_key, upstream_path, body, extra_headers=fwd_headers)
         return StreamingResponse(
-            _passthrough_stream_with_recovery(
-                gen, request, provider_key, inbound_format, status_dict
-            ),
+            _passthrough_stream_with_recovery(gen, provider_key, inbound_format, status_dict),
             media_type="text/event-stream",
             headers=_STREAM_HEADERS,
         )
@@ -220,7 +218,6 @@ async def _passthrough(
 
 async def _passthrough_stream_with_recovery(
     gen: AsyncIterator[bytes],
-    request: Request,
     provider_key: str,
     inbound_format: str,
     status_dict: dict[str, Any],
@@ -228,8 +225,6 @@ async def _passthrough_stream_with_recovery(
     log = get_logger()
     try:
         async for chunk in gen:
-            if await request.is_disconnected():
-                break
             yield chunk
         record_provider_status(status_dict, provider_key, ok=True)
     except httpx.HTTPError as e:
@@ -273,7 +268,6 @@ async def _translate(
                 upstream_body,
                 provider_key,
                 upstream_path,
-                request,
                 upstream,
                 fwd_headers,
                 status_dict,
@@ -330,7 +324,6 @@ async def _translate_stream(
     payload: dict[str, Any],
     provider_key: str,
     upstream_path: str,
-    request: Request,
     upstream: UpstreamClient,
     fwd_headers: dict[str, str],
     status_dict: dict[str, Any],
@@ -346,8 +339,6 @@ async def _translate_stream(
         out_bytes = _STREAM_RENDER[inbound_format](ir_events)
 
         async for chunk in out_bytes:
-            if await request.is_disconnected():
-                break
             yield chunk
         record_provider_status(status_dict, provider_key, ok=True)
     except httpx.HTTPError as e:
