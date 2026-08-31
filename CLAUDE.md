@@ -62,6 +62,7 @@ On inference, the `claude-code/` prefix is stripped and the model resolves norma
 - **thinking.type**: parsed as `reasoning.thinking_type` (enabled/adaptive/disabled). Rendered back as `thinking: {type, budget_tokens}`.
 - **cache_control**: preserved in `_raw` on every content block. Rendered back when present.
 - **Tool extras**: `defer_loading`, `type`, `cache_control` from tool `_raw` are merged into rendered tool definitions.
+- **Tool search**: `server_tool_use` + `tool_search_tool_result` blocks parse into `ServerToolUsePart` / `ToolSearchResultPart` and render back. A bare `tool_reference` name resolves against the request's `tools[]` catalog at parse time. Search tool entries render verbatim from `_raw`, never with an injected `input_schema`.
 
 ### OpenAI Chat codec
 - **System/developer roles**: extracted from message list, concatenated with `\n\n`, stored as `system` on IR.
@@ -75,12 +76,13 @@ On inference, the `claude-code/` prefix is stripped and the model resolves norma
 - **Output items**: message, function_call, reasoning, compaction.
 - **Reasoning**: `encrypted_content` + `id` round-trip via Anthropic signature. `summary` accepts concise/detailed/auto.
 - **Phase markers** (commentary/final_answer): preserved in `_raw`, emitted only when the source item had them.
+- **Tool search**: `tool_search_call` / `tool_search_output` items map to/from the anthropic search blocks, paired through a synthesized `srvtoolu_` id when `call_id` is null (server execution). `defer_loading` on functions round-trips via the IR `deferred` flag; a `{"type":"tool_search","execution":"server"}` entry is synthesized when any tool is deferred and none is present. Client/BYOT execution has no anthropic equivalent and is refused with a translation error, never silently converted.
 
 ### Pipeline
 - **Header forwarding**: `anthropic-beta`, `anthropic-version`, `x-claude-code-session-id` extracted from inbound request and forwarded to every upstream call.
 - **Model resolution**: `<provider_key>/<model_name>` split on first `/`. Optional `upstream_name` per model remaps what we forward. `claude-code/` prefix stripped and re-resolved.
 - **Provider status**: recorded after each upstream call; exposed via `GET /providers`.
-- **Cancellation**: `request.is_disconnected()` polled in streaming loops; on disconnect, the generator exits, closing the upstream `httpx.stream` context.
+- **Cancellation**: the ASGI server cancels the streaming generator on client disconnect, closing the upstream `httpx.stream` context.
 
 ### Streaming
 - **Ping injection**: when outbound format is anthropic, `wrap_with_ping()` emits a `ping` event if 15s pass without an upstream event. Uses a producer-task + queue pattern so the source generator is never cancelled mid-await.

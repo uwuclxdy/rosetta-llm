@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -68,13 +69,35 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                 block = data.get("content_block", {}) or {}
                 current_block_index = data.get("index", 0)
                 btype = block.get("type", "")
-                part_type_map = {"text": "text", "thinking": "reasoning", "tool_use": "tool_call"}
+                part_type_map = {
+                    "text": "text",
+                    "thinking": "reasoning",
+                    "tool_use": "tool_call",
+                    "server_tool_use": "server_tool_use",
+                    "tool_search_tool_result": "tool_search_tool_result",
+                }
+                if btype in ("tool_use", "server_tool_use"):
+                    block_id = block.get("id")
+                    block_name = block.get("name")
+                elif btype == "tool_search_tool_result":
+                    block_id = block.get("tool_use_id")
+                    block_name = None
+                else:
+                    block_id = None
+                    block_name = None
+                payload: dict[str, Any] = {}
+                if btype == "server_tool_use":
+                    payload = {"input": block.get("input") or {}}
+                elif btype == "tool_search_tool_result":
+                    references = (block.get("content") or {}).get("tool_references") or []
+                    payload = {"tool_references": references}
                 yield with_raw(
                     PartStartEvent(
                         index=current_block_index,
                         part_type=part_type_map.get(btype, btype),
-                        call_id=block.get("id") if btype == "tool_use" else None,
-                        name=block.get("name") if btype == "tool_use" else None,
+                        call_id=block_id,
+                        name=block_name,
+                        payload=payload,
                     ),
                     block,
                 )
@@ -184,6 +207,27 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
                 }
             elif event.part_type == "reasoning":
                 block = {"type": "thinking", "thinking": "", "signature": ""}
+            elif event.part_type == "server_tool_use":
+                if not re.fullmatch(r"srvtoolu_[a-zA-Z0-9_]+", event.call_id or ""):
+                    raise ValueError(
+                        "client-executed tool search has no anthropic equivalent; "
+                        "refusing to translate"
+                    )
+                block = {
+                    "type": "server_tool_use",
+                    "id": event.call_id or "",
+                    "name": event.name or "",
+                    "input": event.payload.get("input") or {},
+                }
+            elif event.part_type == "tool_search_tool_result":
+                block = {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": event.call_id or "",
+                    "content": {
+                        "type": "tool_search_tool_search_result",
+                        "tool_references": event.payload.get("tool_references") or [],
+                    },
+                }
             elif event.part_type == "text":
                 block = {"type": "text", "text": ""}
             else:

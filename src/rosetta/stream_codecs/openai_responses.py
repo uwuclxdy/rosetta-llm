@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -28,6 +29,7 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
     buffer = b""
     current_item_index = -1
     ws_counters: dict[int, int] = {}
+    pending_search_id = ""
 
     async for chunk in chunks:
         buffer += chunk
@@ -79,6 +81,10 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                         yield with_raw(
                             PartStartEvent(index=current_item_index, part_type="reasoning"), data
                         )
+                    elif item_type in ("tool_search_call", "tool_search_output"):
+                        # The payload arrives with output_item.done; emit the
+                        # PartStartEvent there so the rendered block carries it.
+                        continue
 
                 elif evt_type == "response.output_text.delta":
                     delta_text = data.get("delta", "")
@@ -140,9 +146,47 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                     "response.function_call_arguments.done",
                     "response.output_item.done",
                 ):
-                    yield with_raw(
-                        PartStopEvent(index=data.get("output_index", current_item_index)), data
-                    )
+                    idx = data.get("output_index", current_item_index)
+                    item = data.get("item", {}) or {}
+                    if item.get("type") == "tool_search_call":
+                        search_id = item.get("call_id") or f"srvtoolu_{uuid.uuid4().hex[:16]}"
+                        pending_search_id = search_id
+                        yield with_raw(
+                            PartStartEvent(
+                                index=idx,
+                                part_type="server_tool_use",
+                                call_id=search_id,
+                                name="tool_search_tool_regex",
+                                payload={"input": item.get("arguments") or {}},
+                            ),
+                            data,
+                        )
+                        yield with_raw(PartStopEvent(index=idx), data)
+                        continue
+                    if item.get("type") == "tool_search_output":
+                        search_id = (
+                            item.get("call_id")
+                            or pending_search_id
+                            or f"srvtoolu_{uuid.uuid4().hex[:16]}"
+                        )
+                        pending_search_id = ""
+                        references = [
+                            {"type": "tool_reference", "tool_name": t.get("name", "")}
+                            for t in item.get("tools") or []
+                            if isinstance(t, dict)
+                        ]
+                        yield with_raw(
+                            PartStartEvent(
+                                index=idx,
+                                part_type="tool_search_tool_result",
+                                call_id=search_id,
+                                payload={"tool_references": references},
+                            ),
+                            data,
+                        )
+                        yield with_raw(PartStopEvent(index=idx), data)
+                        continue
+                    yield with_raw(PartStopEvent(index=idx), data)
 
                 elif evt_type in ("response.completed", "response.incomplete"):
                     resp = data.get("response", {}) or {}
@@ -258,6 +302,42 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
                         "type": "response.output_item.added",
                         "output_index": event.index,
                         "item": {"type": "reasoning", "id": f"rs_{event.index}", "summary": []},
+                    }
+                )
+            elif event.part_type == "server_tool_use":
+                yield _sse(
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": event.index,
+                        "item": {
+                            "type": "tool_search_call",
+                            "execution": "server",
+                            "call_id": None,
+                            "status": "completed",
+                            "arguments": event.payload.get("input") or {},
+                        },
+                    }
+                )
+            elif event.part_type == "tool_search_tool_result":
+                tools = [
+                    {
+                        "type": "function",
+                        "name": r.get("tool_name", ""),
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                    for r in event.payload.get("tool_references") or []
+                ]
+                yield _sse(
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": event.index,
+                        "item": {
+                            "type": "tool_search_output",
+                            "execution": "server",
+                            "call_id": None,
+                            "status": "completed",
+                            "tools": tools,
+                        },
                     }
                 )
         elif isinstance(event, PartDeltaEvent):
