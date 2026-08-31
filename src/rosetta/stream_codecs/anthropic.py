@@ -31,6 +31,8 @@ from rosetta.ir.helpers import with_raw
 from rosetta.ir.response import StopInfo, Usage
 from rosetta.stop_reasons import ANTHROPIC_STOP as _STOP_NORM
 
+_SEARCH_TOOL_NAMES = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
+
 
 async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEvent]:
     """Parse Anthropic SSE byte stream into canonical IR events."""
@@ -86,7 +88,7 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                     block_id = None
                     block_name = None
                 payload: dict[str, Any] = {}
-                if btype == "server_tool_use":
+                if btype == "server_tool_use" and block.get("name", "") in _SEARCH_TOOL_NAMES:
                     payload = {"input": block.get("input") or {}}
                 elif btype == "tool_search_tool_result":
                     references = (block.get("content") or {}).get("tool_references") or []

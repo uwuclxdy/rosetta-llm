@@ -76,7 +76,7 @@ On inference, the `claude-code/` prefix is stripped and the model resolves norma
 - **Output items**: message, function_call, reasoning, compaction.
 - **Reasoning**: `encrypted_content` + `id` round-trip via Anthropic signature. `summary` accepts concise/detailed/auto.
 - **Phase markers** (commentary/final_answer): preserved in `_raw`, emitted only when the source item had them.
-- **Tool search**: `tool_search_call` / `tool_search_output` items map to/from the anthropic search blocks, paired through a synthesized `srvtoolu_` id when `call_id` is null (server execution). `defer_loading` on functions round-trips via the IR `deferred` flag; a `{"type":"tool_search","execution":"server"}` entry is synthesized when any tool is deferred and none is present. Client/BYOT execution has no anthropic equivalent and is refused with a translation error, never silently converted.
+- **Tool search**: `tool_search_call` / `tool_search_output` items map to/from the anthropic search blocks, paired through a synthesized `srvtoolu_` id when `call_id` is null (server execution). `defer_loading` on functions round-trips via the IR `deferred` flag; a `{"type":"tool_search","execution":"server"}` entry is synthesized when any tool is deferred and none is present. Client/BYOT execution has no anthropic equivalent and is refused with a translation error, never silently converted. `arguments` is a JSON object on this wire; a JSON string is rejected by validation (loud 400).
 
 ### Pipeline
 - **Header forwarding**: `anthropic-beta`, `anthropic-version`, `x-claude-code-session-id` extracted from inbound request and forwarded to every upstream call.

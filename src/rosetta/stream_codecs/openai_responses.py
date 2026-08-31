@@ -23,6 +23,8 @@ from rosetta.ir.response import StopInfo, Usage
 
 MAX_WHITESPACE_RUN = 20
 
+_SEARCH_TOOL_NAMES = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
+
 
 async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEvent]:
     """Parse OpenAI Responses semantic event stream into canonical IR events."""
@@ -304,7 +306,7 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
                         "item": {"type": "reasoning", "id": f"rs_{event.index}", "summary": []},
                     }
                 )
-            elif event.part_type == "server_tool_use":
+            elif event.part_type == "server_tool_use" and event.name in _SEARCH_TOOL_NAMES:
                 yield _sse(
                     {
                         "type": "response.output_item.added",

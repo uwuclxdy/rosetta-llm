@@ -501,3 +501,18 @@ async def test_stream_byot_tool_search_refuses_anthropic_render() -> None:
 
     with pytest.raises(ValueError, match="client-executed tool search"):
         _ = [event async for event in ac_stream.render(or_stream.parse(chunks()))]
+
+
+async def test_stream_unknown_server_tool_name_not_translated_as_search() -> None:
+    sse = (
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"x","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\n'
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_abc123","name":"web_search_tool","input":{}}}\n\n'
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n'
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
+    out = b"".join([event async for event in or_stream.render(ac_stream.parse(chunks()))])
+    assert b'"tool_search_call"' not in out
