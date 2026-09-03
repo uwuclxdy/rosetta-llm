@@ -11,7 +11,11 @@ Translation invariants:
   - Ping injection is added only when outbound format == anthropic.
   - Cancellation: a client disconnect aborts the streaming generator,
     which exits the upstream `httpx.stream` context and closes the
-    connection.
+    connection. Starlette's StreamingResponse cancels the stream task
+    on `http.disconnect` (task-group branch for ASGI < 2.4 servers, the
+    branch uvicorn takes), so no periodic `is_disconnected()` poll:
+    under ASGI test transports it reports disconnected right after body
+    exhaustion, killing healthy streams.
 """
 
 from __future__ import annotations
@@ -155,7 +159,6 @@ async def handle(
             upstream_body,
             is_stream,
             inbound_format,
-            request,
             upstream,
             log,
             fwd_headers,
@@ -169,7 +172,6 @@ async def handle(
         provider_key,
         upstream_path,
         is_stream,
-        request,
         upstream,
         log,
         fwd_headers,
@@ -183,7 +185,6 @@ async def _passthrough(
     body: dict[str, Any],
     is_stream: bool,
     inbound_format: str,
-    request: Request,
     upstream: UpstreamClient,
     log: Any,
     fwd_headers: dict[str, str],
@@ -240,7 +241,6 @@ async def _translate(
     provider_key: str,
     upstream_path: str,
     is_stream: bool,
-    request: Request,
     upstream: UpstreamClient,
     log: Any,
     fwd_headers: dict[str, str],

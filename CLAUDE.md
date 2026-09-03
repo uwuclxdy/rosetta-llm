@@ -82,7 +82,7 @@ On inference, the `claude-code/` prefix is stripped and the model resolves norma
 - **Header forwarding**: `anthropic-beta`, `anthropic-version`, `x-claude-code-session-id` extracted from inbound request and forwarded to every upstream call.
 - **Model resolution**: `<provider_key>/<model_name>` split on first `/`. Optional `upstream_name` per model remaps what we forward. `claude-code/` prefix stripped and re-resolved.
 - **Provider status**: recorded after each upstream call; exposed via `GET /providers`.
-- **Cancellation**: the ASGI server cancels the streaming generator on client disconnect, closing the upstream `httpx.stream` context.
+- **Cancellation**: starlette cancels the streaming generator on client disconnect (ASGI < 2.4 task-group branch), closing the upstream `httpx.stream` context.
 
 ### Streaming
 - **Ping injection**: when outbound format is anthropic, `wrap_with_ping()` emits a `ping` event if 15s pass without an upstream event. Uses a producer-task + queue pattern so the source generator is never cancelled mid-await.
