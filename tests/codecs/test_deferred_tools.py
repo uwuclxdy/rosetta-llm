@@ -414,6 +414,26 @@ def test_byot_tool_search_items_refuse_parse() -> None:
         orc.parse_response(payload)
 
 
+def test_tool_search_item_without_execution_refuses_parse() -> None:
+    payload = {
+        "id": "resp_x",
+        "object": "response",
+        "model": "gpt-5.5",
+        "status": "completed",
+        "output": [
+            {
+                "type": "tool_search_call",
+                "call_id": "ts_9",
+                "status": "completed",
+                "arguments": {"pattern": "w"},
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    with pytest.raises(ValueError, match="without execution"):
+        orc.parse_response(payload)
+
+
 def test_client_execution_search_entry_refuses_anthropic_render() -> None:
     payload = {
         "model": "gpt-5.5",
@@ -487,6 +507,19 @@ def test_search_blocks_preserve_cache_control() -> None:
     blocks = rendered["messages"][0]["content"]
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
     assert blocks[1]["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_stream_tool_search_without_execution_refuses_parse() -> None:
+    sse = (
+        b'data: {"type":"response.created","response":{"id":"r1","model":"m1","status":"in_progress","output":[]}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"tool_search_call","call_id":"ts_9","status":"completed","arguments":{"pattern":"w"}}}\n\n'
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
+    with pytest.raises(ValueError, match="without execution"):
+        _ = [event async for event in or_stream.parse(chunks())]
 
 
 async def test_stream_byot_tool_search_refuses_parse() -> None:

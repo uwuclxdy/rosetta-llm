@@ -136,10 +136,13 @@ def _parse_tool_search_item(
     item through it. Client-executed search has no anthropic equivalent and
     is refused here, at the boundary, before any rendering.
     """
-    if item.get("execution") == "client":
+    execution = item.get("execution")
+    if execution == "client":
         raise ValueError(
             "client-executed tool search has no anthropic equivalent; refusing to translate"
         )
+    if execution is None:
+        raise ValueError("tool search item without execution cannot be translated")
     if item.get("type") == "tool_search_call":
         call_id = item.get("call_id") or f"srvtoolu_{uuid.uuid4().hex[:16]}"
         # Anthropic carries the search variant in the block name; Responses
@@ -540,6 +543,9 @@ def _search_call_item(part: ServerToolUsePart) -> dict[str, Any]:
         "status": "completed",
         "arguments": part.input,
     }
+    # Responses has no variant channel, so bm25 rides this extra field; a
+    # strict upstream may 400 on it, which is loud where dropping the field
+    # would silently collapse bm25 to regex.
     if part.name == "tool_search_tool_bm25":
         item["search_variant"] = "bm25"
     return item

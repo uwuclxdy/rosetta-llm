@@ -150,11 +150,17 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                 ):
                     idx = data.get("output_index", current_item_index)
                     item = data.get("item", {}) or {}
-                    if item.get("execution") == "client":
-                        raise ValueError(
-                            "client-executed tool search has no anthropic equivalent; "
-                            "refusing to translate"
-                        )
+                    if item.get("type") in ("tool_search_call", "tool_search_output"):
+                        execution = item.get("execution")
+                        if execution == "client":
+                            raise ValueError(
+                                "client-executed tool search has no anthropic equivalent; "
+                                "refusing to translate"
+                            )
+                        if execution is None:
+                            raise ValueError(
+                                "tool search item without execution cannot be translated"
+                            )
                     if item.get("type") == "tool_search_call":
                         search_id = item.get("call_id") or f"srvtoolu_{uuid.uuid4().hex[:16]}"
                         pending_search_id = search_id
