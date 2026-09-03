@@ -11,6 +11,7 @@ import pytest
 
 from rosetta.codecs import anthropic as ac
 from rosetta.codecs import openai_responses as orc
+from rosetta.ir.request import ToolSearchResultPart
 from rosetta.stream_codecs import anthropic as ac_stream
 from rosetta.stream_codecs import openai_responses as or_stream
 
@@ -392,7 +393,7 @@ async def test_stream_anthropic_search_blocks_render_as_responses_items() -> Non
     assert "".join(deltas) == '{"city":"Paris"}'
 
 
-def test_byot_tool_search_items_refuse_anthropic_render() -> None:
+def test_byot_tool_search_items_refuse_parse() -> None:
     payload = {
         "id": "resp_x",
         "object": "response",
@@ -409,9 +410,8 @@ def test_byot_tool_search_items_refuse_anthropic_render() -> None:
         ],
         "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
     }
-    ir = orc.parse_response(payload)
     with pytest.raises(ValueError, match="client-executed tool search"):
-        ac.render_response(ir)
+        orc.parse_response(payload)
 
 
 def test_client_execution_search_entry_refuses_anthropic_render() -> None:
@@ -489,7 +489,7 @@ def test_search_blocks_preserve_cache_control() -> None:
     assert blocks[1]["cache_control"] == {"type": "ephemeral"}
 
 
-async def test_stream_byot_tool_search_refuses_anthropic_render() -> None:
+async def test_stream_byot_tool_search_refuses_parse() -> None:
     sse = (
         b'data: {"type":"response.created","response":{"id":"r1","model":"m1","status":"in_progress","output":[]}}\n\n'
         b'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"tool_search_call","execution":"client","call_id":"ts_9","status":"in_progress","arguments":{}}}\n\n'
@@ -500,7 +500,138 @@ async def test_stream_byot_tool_search_refuses_anthropic_render() -> None:
         yield sse
 
     with pytest.raises(ValueError, match="client-executed tool search"):
-        _ = [event async for event in ac_stream.render(or_stream.parse(chunks()))]
+        _ = [event async for event in or_stream.parse(chunks())]
+
+
+def test_bm25_search_variant_round_trips_through_responses() -> None:
+    payload = {
+        "id": "msg_x",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude",
+        "stop_reason": "tool_use",
+        "content": [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_abc123",
+                "name": "tool_search_tool_bm25",
+                "input": {"query": "weather"},
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 2},
+    }
+    rendered_responses = orc.render_response(ac.parse_response(payload))
+    call = rendered_responses["output"][0]
+    assert call["search_variant"] == "bm25"
+
+    rendered_back = ac.render_response(orc.parse_response(rendered_responses))
+    block = rendered_back["content"][0]
+    assert block["name"] == "tool_search_tool_bm25"
+    assert block["input"] == {"query": "weather"}
+
+
+def test_regex_search_variant_is_the_default() -> None:
+    payload = {
+        "id": "msg_x",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude",
+        "stop_reason": "tool_use",
+        "content": [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_abc123",
+                "name": "tool_search_tool_regex",
+                "input": {"pattern": "weather"},
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 2},
+    }
+    rendered_responses = orc.render_response(ac.parse_response(payload))
+    assert "search_variant" not in rendered_responses["output"][0]
+
+    rendered_back = ac.render_response(orc.parse_response(rendered_responses))
+    assert rendered_back["content"][0]["name"] == "tool_search_tool_regex"
+
+
+def test_catalog_resolved_tools_preserve_raw_extras() -> None:
+    payload = {
+        "model": "x",
+        "max_tokens": 16,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_abc123",
+                        "content": {
+                            "type": "tool_search_tool_search_result",
+                            "tool_references": [
+                                {"type": "tool_reference", "tool_name": "get_weather"}
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+        "tools": [
+            _weather_tool(
+                defer_loading=True,
+                cache_control={"type": "ephemeral"},
+                vendor_extra="keep-me",
+            )
+        ],
+    }
+    ir = ac.parse_request(payload)
+    result_part = ir.messages[0].parts[0]
+    assert isinstance(result_part, ToolSearchResultPart)
+    resolved = result_part.tools[0]
+    assert resolved._raw.get("cache_control") == {"type": "ephemeral"}
+    assert resolved._raw.get("vendor_extra") == "keep-me"
+
+    rendered = ac.render_request(ir)
+    tool = next(t for t in rendered["tools"] if t.get("name") == "get_weather")
+    assert tool.get("cache_control") == {"type": "ephemeral"}
+    assert tool.get("vendor_extra") == "keep-me"
+    assert tool.get("defer_loading") is True
+
+
+async def test_stream_tool_search_output_preserves_full_tools() -> None:
+    sse = (
+        b'data: {"type":"response.created","response":{"id":"r1","model":"m1","status":"in_progress","output":[]}}\n\n'
+        b'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"tool_search_call","execution":"server","call_id":null,"status":"in_progress","arguments":{}}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"tool_search_call","execution":"server","call_id":null,"status":"completed","arguments":{"pattern":"w"}}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":1,"item":{"type":"tool_search_output","execution":"server","call_id":null,"status":"completed","tools":[{"type":"function","name":"get_weather","description":"Get weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}]}}\n\n'
+        b'data: {"type":"response.completed","response":{"id":"r1","model":"m1","status":"completed","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
+    out = b"".join([event async for event in or_stream.render(or_stream.parse(chunks()))])
+    added: list[dict[str, Any]] = []
+    for block in out.split(b"\n\n"):
+        for line in block.split(b"\n"):
+            if not line.startswith(b"data: "):
+                continue
+            try:
+                data = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+            if data.get("type") == "response.output_item.added":
+                added.append(data["item"])
+
+    output_item = next(i for i in added if i["type"] == "tool_search_output")
+    assert output_item["tools"] == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather for a city",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        }
+    ]
 
 
 async def test_stream_unknown_server_tool_name_not_translated_as_search() -> None:

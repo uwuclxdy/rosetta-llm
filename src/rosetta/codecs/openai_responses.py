@@ -133,10 +133,22 @@ def _parse_tool_search_item(
 
     Server-executed search items carry `call_id: null`; the proxy synthesizes
     the anthropic-side `srvtoolu_` id and pairs the output item to the call
-    item through it.
+    item through it. Client-executed search has no anthropic equivalent and
+    is refused here, at the boundary, before any rendering.
     """
+    if item.get("execution") == "client":
+        raise ValueError(
+            "client-executed tool search has no anthropic equivalent; refusing to translate"
+        )
     if item.get("type") == "tool_search_call":
         call_id = item.get("call_id") or f"srvtoolu_{uuid.uuid4().hex[:16]}"
+        # Anthropic carries the search variant in the block name; Responses
+        # has no variant field, so the proxy re-emits `search_variant`.
+        name = (
+            "tool_search_tool_bm25"
+            if item.get("search_variant") == "bm25"
+            else "tool_search_tool_regex"
+        )
         return (
             with_raw(
                 Message(
@@ -145,7 +157,7 @@ def _parse_tool_search_item(
                         with_raw(
                             ServerToolUsePart(
                                 call_id=call_id,
-                                name="tool_search_tool_regex",
+                                name=name,
                                 input=item.get("arguments") or {},
                             ),
                             item,
@@ -423,15 +435,7 @@ def render_request(ir: CanonicalRequest) -> dict[str, Any]:
                 if message_content:
                     body["input"].append(_message_item(msg.role, message_content))
                     message_content = []
-                body["input"].append(
-                    {
-                        "type": "tool_search_call",
-                        "execution": "server",
-                        "call_id": None,
-                        "status": "completed",
-                        "arguments": part.input,
-                    }
-                )
+                body["input"].append(_search_call_item(part))
             elif isinstance(part, ToolSearchResultPart):
                 if message_content:
                     body["input"].append(_message_item(msg.role, message_content))
@@ -526,6 +530,19 @@ def _message_item(role: str, content: list[dict[str, Any]]) -> dict[str, Any]:
     if role not in ("user", "assistant", "system"):
         role = "user"
     return {"type": "message", "role": role, "content": content}
+
+
+def _search_call_item(part: ServerToolUsePart) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "type": "tool_search_call",
+        "execution": "server",
+        "call_id": None,
+        "status": "completed",
+        "arguments": part.input,
+    }
+    if part.name == "tool_search_tool_bm25":
+        item["search_variant"] = "bm25"
+    return item
 
 
 def _render_tool_choice(tool_choice: Any) -> Any:
@@ -686,15 +703,7 @@ def render_response(ir: CanonicalResponse) -> dict[str, Any]:
                     }
                 )
             elif isinstance(part, ServerToolUsePart):
-                output.append(
-                    {
-                        "type": "tool_search_call",
-                        "execution": "server",
-                        "call_id": None,
-                        "status": "completed",
-                        "arguments": part.input,
-                    }
-                )
+                output.append(_search_call_item(part))
             elif isinstance(part, ToolSearchResultPart):
                 output.append(
                     {

@@ -7,7 +7,6 @@ on parse by splitting on the *last* `@`.
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import orjson
@@ -166,13 +165,16 @@ def _parse_content_block(
             catalog_tool = tool_catalog.get(name) if tool_catalog else None
             if catalog_tool is not None:
                 tools.append(
-                    Tool(
-                        name=catalog_tool.name,
-                        description=catalog_tool.description,
-                        input_schema=catalog_tool.input_schema,
-                        kind=catalog_tool.kind,
-                        strict=catalog_tool.strict,
-                        deferred=catalog_tool.deferred,
+                    with_raw(
+                        Tool(
+                            name=catalog_tool.name,
+                            description=catalog_tool.description,
+                            input_schema=catalog_tool.input_schema,
+                            kind=catalog_tool.kind,
+                            strict=catalog_tool.strict,
+                            deferred=catalog_tool.deferred,
+                        ),
+                        catalog_tool._raw,
                     )
                 )
             else:
@@ -267,10 +269,8 @@ def _render_content_part(part: ContentPart) -> dict[str, Any]:
             block["is_error"] = True
         return block
     if isinstance(part, ServerToolUsePart):
-        if not re.fullmatch(r"srvtoolu_[a-zA-Z0-9_]+", part.call_id):
-            raise ValueError(
-                "client-executed tool search has no anthropic equivalent; refusing to translate"
-            )
+        # client-executed search is refused at Responses parse time, so every
+        # ServerToolUsePart here is server-executed.
         block = {
             "type": "server_tool_use",
             "id": part.call_id,

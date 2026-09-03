@@ -150,15 +150,25 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                 ):
                     idx = data.get("output_index", current_item_index)
                     item = data.get("item", {}) or {}
+                    if item.get("execution") == "client":
+                        raise ValueError(
+                            "client-executed tool search has no anthropic equivalent; "
+                            "refusing to translate"
+                        )
                     if item.get("type") == "tool_search_call":
                         search_id = item.get("call_id") or f"srvtoolu_{uuid.uuid4().hex[:16]}"
                         pending_search_id = search_id
+                        name = (
+                            "tool_search_tool_bm25"
+                            if item.get("search_variant") == "bm25"
+                            else "tool_search_tool_regex"
+                        )
                         yield with_raw(
                             PartStartEvent(
                                 index=idx,
                                 part_type="server_tool_use",
                                 call_id=search_id,
-                                name="tool_search_tool_regex",
+                                name=name,
                                 payload={"input": item.get("arguments") or {}},
                             ),
                             data,
@@ -172,17 +182,19 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                             or f"srvtoolu_{uuid.uuid4().hex[:16]}"
                         )
                         pending_search_id = ""
+                        tools = [t for t in item.get("tools") or [] if isinstance(t, dict)]
                         references = [
                             {"type": "tool_reference", "tool_name": t.get("name", "")}
-                            for t in item.get("tools") or []
-                            if isinstance(t, dict)
+                            for t in tools
                         ]
                         yield with_raw(
                             PartStartEvent(
                                 index=idx,
                                 part_type="tool_search_tool_result",
                                 call_id=search_id,
-                                payload={"tool_references": references},
+                                # `tools` keeps full definitions for responses
+                                # renders; the anthropic wire only has names.
+                                payload={"tool_references": references, "tools": tools},
                             ),
                             data,
                         )
@@ -307,28 +319,35 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
                     }
                 )
             elif event.part_type == "server_tool_use" and event.name in _SEARCH_TOOL_NAMES:
+                item: dict[str, Any] = {
+                    "type": "tool_search_call",
+                    "execution": "server",
+                    "call_id": None,
+                    "status": "completed",
+                    "arguments": event.payload.get("input") or {},
+                }
+                if event.name == "tool_search_tool_bm25":
+                    item["search_variant"] = "bm25"
                 yield _sse(
                     {
                         "type": "response.output_item.added",
                         "output_index": event.index,
-                        "item": {
-                            "type": "tool_search_call",
-                            "execution": "server",
-                            "call_id": None,
-                            "status": "completed",
-                            "arguments": event.payload.get("input") or {},
-                        },
+                        "item": item,
                     }
                 )
             elif event.part_type == "tool_search_tool_result":
-                tools = [
-                    {
-                        "type": "function",
-                        "name": r.get("tool_name", ""),
-                        "parameters": {"type": "object", "properties": {}},
-                    }
-                    for r in event.payload.get("tool_references") or []
-                ]
+                full_tools = event.payload.get("tools")
+                if full_tools:
+                    tools = full_tools
+                else:
+                    tools = [
+                        {
+                            "type": "function",
+                            "name": r.get("tool_name", ""),
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                        for r in event.payload.get("tool_references") or []
+                    ]
                 yield _sse(
                     {
                         "type": "response.output_item.added",

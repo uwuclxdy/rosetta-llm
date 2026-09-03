@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -210,11 +209,7 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
             elif event.part_type == "reasoning":
                 block = {"type": "thinking", "thinking": "", "signature": ""}
             elif event.part_type == "server_tool_use":
-                if not re.fullmatch(r"srvtoolu_[a-zA-Z0-9_]+", event.call_id or ""):
-                    raise ValueError(
-                        "client-executed tool search has no anthropic equivalent; "
-                        "refusing to translate"
-                    )
+                # client-executed search is refused at Responses parse time.
                 block = {
                     "type": "server_tool_use",
                     "id": event.call_id or "",
