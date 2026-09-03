@@ -6,7 +6,7 @@ Multi-format bidirectional LLM proxy. Translates between OpenAI Chat Completions
 
 ```bash
 uv sync                        # install deps + dev tools
-uv run pytest tests/ -q        # run tests (18)
+uv run pytest tests/ -q        # run tests (44)
 uv run ruff check src/ tests/  # lint
 uv run ruff format src/ tests/ # format
 uv run mypy src/rosetta        # type-check (strict mode)
@@ -127,4 +127,4 @@ Model id format: `<provider_key>/<model_name>` (e.g., `anthropic/claude-opus-4-7
 - `tests/codecs/test_roundtrip.py` — codec property tests: Anthropic round-trip, tool-use input as object, tool-result ordering, Chat→Anthropic tool-call ID preservation, reasoning lossless round-trip (encrypted_content+id via signature), response round-trip, unknown-param passthrough, max_tokens synthesis, streaming partial-JSON buffering.
 - `tests/test_e2e.py` — FastAPI TestClient + respx: health, models, count_tokens, Chat passthrough, Anthropic→Chat translation, unknown provider 400, upstream-error format matching, auth, stream passthrough.
 
-Run with: `uv run pytest tests/ -q` (18 tests, ~0.5s).
+Run with: `uv run pytest tests/ -q` (44 tests, ~0.5s).
