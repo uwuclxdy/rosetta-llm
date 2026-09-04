@@ -87,7 +87,12 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                     block_id = None
                     block_name = None
                 payload: dict[str, Any] = {}
-                if btype == "server_tool_use" and block.get("name", "") in _SEARCH_TOOL_NAMES:
+                if btype == "server_tool_use" and block.get("name", "") not in _SEARCH_TOOL_NAMES:
+                    raise ValueError(
+                        f"server tool '{block.get('name', '')}' cannot be translated; "
+                        "only tool search server tools are supported"
+                    )
+                if btype == "server_tool_use":
                     payload = {"input": block.get("input") or {}}
                 elif btype == "tool_search_tool_result":
                     references = (block.get("content") or {}).get("tool_references") or []

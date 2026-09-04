@@ -368,6 +368,7 @@ async def test_stream_anthropic_search_blocks_render_as_responses_items() -> Non
     out = b"".join([event async for event in or_stream.render(ac_stream.parse(chunks()))])
 
     added: list[dict[str, Any]] = []
+    done: list[dict[str, Any]] = []
     deltas: list[str] = []
     for block in out.split(b"\n\n"):
         for line in block.split(b"\n"):
@@ -379,6 +380,8 @@ async def test_stream_anthropic_search_blocks_render_as_responses_items() -> Non
                 continue
             if data.get("type") == "response.output_item.added":
                 added.append(data["item"])
+            elif data.get("type") == "response.output_item.done":
+                done.append(data)
             elif data.get("type") == "response.function_call_arguments.delta":
                 deltas.append(data["delta"])
 
@@ -391,6 +394,17 @@ async def test_stream_anthropic_search_blocks_render_as_responses_items() -> Non
     assert added[0]["arguments"] == {"pattern": "w"}
     assert [t["name"] for t in added[1]["tools"]] == ["get_weather"]
     assert "".join(deltas) == '{"city":"Paris"}'
+
+    # Search blocks are one-shot: their `done` events repeat the item so a
+    # downstream parser reading only `done` keeps the payload.
+    search_done = [
+        d
+        for d in done
+        if d.get("item", {}).get("type") in ("tool_search_call", "tool_search_output")
+    ]
+    assert len(search_done) == 2
+    assert search_done[0]["item"]["arguments"] == {"pattern": "w"}
+    assert [t["name"] for t in search_done[1]["item"]["tools"]] == ["get_weather"]
 
 
 def test_byot_tool_search_items_refuse_parse() -> None:
@@ -536,7 +550,7 @@ async def test_stream_byot_tool_search_refuses_parse() -> None:
         _ = [event async for event in or_stream.parse(chunks())]
 
 
-def test_bm25_search_variant_round_trips_through_responses() -> None:
+def test_bm25_variant_stays_in_ir_and_strips_from_responses_wire() -> None:
     payload = {
         "id": "msg_x",
         "type": "message",
@@ -553,14 +567,21 @@ def test_bm25_search_variant_round_trips_through_responses() -> None:
         ],
         "usage": {"input_tokens": 1, "output_tokens": 2},
     }
-    rendered_responses = orc.render_response(ac.parse_response(payload))
-    call = rendered_responses["output"][0]
-    assert call["search_variant"] == "bm25"
+    ir = ac.parse_response(payload)
+    assert ir.output_messages[0].parts[0].name == "tool_search_tool_bm25"
 
+    rendered_responses = orc.render_response(ir)
+    call = rendered_responses["output"][0]
+    assert "search_variant" not in call
+
+    # Responses has no variant channel: bm25 degrades to regex across the wire.
     rendered_back = ac.render_response(orc.parse_response(rendered_responses))
     block = rendered_back["content"][0]
-    assert block["name"] == "tool_search_tool_bm25"
-    assert block["input"] == {"query": "weather"}
+    assert block["name"] == "tool_search_tool_regex"
+
+    # Anthropic-to-anthropic keeps the variant via the block name.
+    anthropic_roundtrip = ac.render_response(ir)
+    assert anthropic_roundtrip["content"][0]["name"] == "tool_search_tool_bm25"
 
 
 def test_regex_search_variant_is_the_default() -> None:
@@ -667,7 +688,7 @@ async def test_stream_tool_search_output_preserves_full_tools() -> None:
     ]
 
 
-async def test_stream_unknown_server_tool_name_not_translated_as_search() -> None:
+async def test_stream_unknown_server_tool_name_refuses_parse() -> None:
     sse = (
         b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"x","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\n'
         b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_abc123","name":"web_search_tool","input":{}}}\n\n'
@@ -678,5 +699,172 @@ async def test_stream_unknown_server_tool_name_not_translated_as_search() -> Non
     async def chunks() -> AsyncIterator[bytes]:
         yield sse
 
+    with pytest.raises(ValueError, match="only tool search server tools"):
+        _ = [event async for event in ac_stream.parse(chunks())]
+
+
+def test_non_search_server_tool_use_refuses_parse() -> None:
+    payload = {
+        "model": "x",
+        "max_tokens": 16,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_abc123",
+                        "name": "web_search_tool",
+                        "input": {"query": "weather"},
+                    }
+                ],
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="only tool search server tools"):
+        ac.parse_request(payload)
+
+
+def test_catalog_miss_tool_reference_keeps_defer_loading() -> None:
+    reference = {
+        "type": "tool_reference",
+        "tool_name": "get_weather",
+        "description": "Get weather for a city",
+        "input_schema": _WEATHER_SCHEMA,
+        "defer_loading": True,
+        "strict": True,
+        "vendor_extra": "keep-me",
+    }
+    payload = {
+        "model": "x",
+        "max_tokens": 16,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_abc123",
+                        "content": {
+                            "type": "tool_search_tool_search_result",
+                            "tool_references": [reference],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    ir = ac.parse_request(payload)
+    result_part = ir.messages[0].parts[0]
+    assert isinstance(result_part, ToolSearchResultPart)
+    resolved = result_part.tools[0]
+    assert resolved.deferred is True
+    assert resolved.strict is True
+    assert resolved._raw == reference
+
+    rendered = orc.render_request(ir)
+    output_item = rendered["input"][0]
+    assert output_item["type"] == "tool_search_output"
+    tool = output_item["tools"][0]
+    assert tool.get("defer_loading") is True
+    assert tool.get("strict") is True
+
+
+async def test_stream_lone_tool_search_output_refuses_parse() -> None:
+    sse = (
+        b'data: {"type":"response.created","response":{"id":"r1","model":"m1","status":"in_progress","output":[]}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"tool_search_output","execution":"server","call_id":null,"status":"completed","tools":[]}}\n\n'
+        b'data: {"type":"response.completed","response":{"id":"r1","model":"m1","status":"completed","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
+    with pytest.raises(ValueError, match="without a preceding tool_search_call"):
+        _ = [event async for event in or_stream.parse(chunks())]
+
+
+async def test_stream_bm25_omits_search_variant_on_wire() -> None:
+    sse = (
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"x","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\n'
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_abc123","name":"tool_search_tool_bm25","input":{"query":"w"}}}\n\n'
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n'
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
     out = b"".join([event async for event in or_stream.render(ac_stream.parse(chunks()))])
-    assert b'"tool_search_call"' not in out
+    assert b'"search_variant"' not in out
+
+
+async def test_stream_search_blocks_survive_proxy_to_proxy_loop() -> None:
+    anthropic_sse = (
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"x","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\n'
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_abc123","name":"tool_search_tool_regex","input":{"pattern":"w"}}}\n\n'
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n'
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_abc123","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"get_weather"}]}}}\n\n'
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n'
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}\n\n'
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    )
+
+    async def chunks(data: bytes) -> AsyncIterator[bytes]:
+        yield data
+
+    responses_wire = b"".join(
+        [event async for event in or_stream.render(ac_stream.parse(chunks(anthropic_sse)))]
+    )
+    final = b"".join(
+        [event async for event in ac_stream.render(or_stream.parse(chunks(responses_wire)))]
+    )
+
+    starts: list[dict[str, Any]] = []
+    for block in final.split(b"\n\n"):
+        for line in block.split(b"\n"):
+            if not line.startswith(b"data: "):
+                continue
+            data = json.loads(line[6:])
+            if data.get("type") == "content_block_start":
+                starts.append(data["content_block"])
+
+    assert [s["type"] for s in starts] == ["server_tool_use", "tool_search_tool_result"]
+    assert starts[0]["input"] == {"pattern": "w"}
+    assert starts[1]["tool_use_id"] == starts[0]["id"]
+    assert starts[1]["content"]["tool_references"] == [
+        {"type": "tool_reference", "tool_name": "get_weather"}
+    ]
+
+
+async def test_stream_search_done_without_item_uses_added_payload() -> None:
+    sse = (
+        b'data: {"type":"response.created","response":{"id":"r1","model":"m1","status":"in_progress","output":[]}}\n\n'
+        b'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"tool_search_call","execution":"server","call_id":null,"status":"in_progress","arguments":{"pattern":"w"}}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":0}\n\n'
+        b'data: {"type":"response.output_item.added","output_index":1,"item":{"type":"tool_search_output","execution":"server","call_id":null,"status":"in_progress","tools":[{"type":"function","name":"get_weather"}]}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":1}\n\n'
+        b'data: {"type":"response.completed","response":{"id":"r1","model":"m1","status":"completed","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
+    out = b"".join([event async for event in ac_stream.render(or_stream.parse(chunks()))])
+
+    starts: list[dict[str, Any]] = []
+    for block in out.split(b"\n\n"):
+        for line in block.split(b"\n"):
+            if not line.startswith(b"data: "):
+                continue
+            data = json.loads(line[6:])
+            if data.get("type") == "content_block_start":
+                starts.append(data["content_block"])
+
+    assert [s["type"] for s in starts] == ["server_tool_use", "tool_search_tool_result"]
+    assert starts[0]["input"] == {"pattern": "w"}
+    assert starts[1]["content"]["tool_references"] == [
+        {"type": "tool_reference", "tool_name": "get_weather"}
+    ]

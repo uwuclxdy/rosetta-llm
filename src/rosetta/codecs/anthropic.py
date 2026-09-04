@@ -153,7 +153,10 @@ def _parse_content_block(
                 ),
                 block,
             )
-        return with_raw(TextPart(text=str(block)), block)
+        raise ValueError(
+            f"server tool '{name}' cannot be translated; "
+            "only tool search server tools are supported"
+        )
     if block_type == "tool_search_tool_result":
         content = block.get("content") or {}
         references = content.get("tool_references") or []
@@ -179,10 +182,15 @@ def _parse_content_block(
                 )
             else:
                 tools.append(
-                    Tool(
-                        name=name,
-                        description=ref.get("description", ""),
-                        input_schema=ref.get("input_schema") or ref.get("parameters") or {},
+                    with_raw(
+                        Tool(
+                            name=name,
+                            description=ref.get("description", ""),
+                            input_schema=ref.get("input_schema") or ref.get("parameters") or {},
+                            strict=bool(ref.get("strict", False)),
+                            deferred=bool(ref.get("defer_loading", False)),
+                        ),
+                        ref,
                     )
                 )
         return with_raw(
@@ -467,6 +475,8 @@ def render_request(ir: CanonicalRequest) -> dict[str, Any]:
             if t.deferred:
                 tool_body["defer_loading"] = True
             body["tools"].append(tool_body)
+        # Synthesized search entries default to regex; a bm25 preference cannot
+        # be known when the client deferred tools without naming a search tool.
         if any(t.deferred for t in ir.tools) and not any(t.kind == "search" for t in ir.tools):
             body["tools"].append(dict(_SYNTHESIZED_SEARCH_TOOL))
         body["tool_choice"] = _render_tool_choice(ir.tool_choice)

@@ -32,6 +32,7 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
     current_item_index = -1
     ws_counters: dict[int, int] = {}
     pending_search_id = ""
+    added_items: dict[int, dict[str, Any]] = {}
 
     async for chunk in chunks:
         buffer += chunk
@@ -84,8 +85,9 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                             PartStartEvent(index=current_item_index, part_type="reasoning"), data
                         )
                     elif item_type in ("tool_search_call", "tool_search_output"):
-                        # The payload arrives with output_item.done; emit the
-                        # PartStartEvent there so the rendered block carries it.
+                        # The payload usually arrives with output_item.done;
+                        # stash it so a done without an item still emits.
+                        added_items[current_item_index] = item
                         continue
 
                 elif evt_type == "response.output_text.delta":
@@ -149,7 +151,7 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                     "response.output_item.done",
                 ):
                     idx = data.get("output_index", current_item_index)
-                    item = data.get("item", {}) or {}
+                    item = data.get("item") or added_items.pop(idx, None) or {}
                     if item.get("type") in ("tool_search_call", "tool_search_output"):
                         execution = item.get("execution")
                         if execution == "client":
@@ -182,11 +184,12 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                         yield with_raw(PartStopEvent(index=idx), data)
                         continue
                     if item.get("type") == "tool_search_output":
-                        search_id = (
-                            item.get("call_id")
-                            or pending_search_id
-                            or f"srvtoolu_{uuid.uuid4().hex[:16]}"
-                        )
+                        search_id = item.get("call_id") or pending_search_id
+                        if not search_id:
+                            raise ValueError(
+                                "tool_search_output without a preceding tool_search_call "
+                                "cannot be translated"
+                            )
                         pending_search_id = ""
                         tools = [t for t in item.get("tools") or [] if isinstance(t, dict)]
                         references = [
@@ -267,6 +270,7 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
     """Render canonical IR events into OpenAI Responses semantic event SSE."""
     model = ""
     response_id = "resp_stream"
+    search_items: dict[int, dict[str, Any]] = {}
 
     async for event in events:
         if isinstance(event, MessageStartEvent):
@@ -332,8 +336,7 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
                     "status": "completed",
                     "arguments": event.payload.get("input") or {},
                 }
-                if event.name == "tool_search_tool_bm25":
-                    item["search_variant"] = "bm25"
+                search_items[event.index] = item
                 yield _sse(
                     {
                         "type": "response.output_item.added",
@@ -354,17 +357,19 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
                         }
                         for r in event.payload.get("tool_references") or []
                     ]
+                item = {
+                    "type": "tool_search_output",
+                    "execution": "server",
+                    "call_id": None,
+                    "status": "completed",
+                    "tools": tools,
+                }
+                search_items[event.index] = item
                 yield _sse(
                     {
                         "type": "response.output_item.added",
                         "output_index": event.index,
-                        "item": {
-                            "type": "tool_search_output",
-                            "execution": "server",
-                            "call_id": None,
-                            "status": "completed",
-                            "tools": tools,
-                        },
+                        "item": item,
                     }
                 )
         elif isinstance(event, PartDeltaEvent):
@@ -393,12 +398,13 @@ async def render(events: AsyncIterator[CanonicalStreamEvent]) -> AsyncIterator[b
                     }
                 )
         elif isinstance(event, PartStopEvent):
-            yield _sse(
-                {
-                    "type": "response.output_item.done",
-                    "output_index": event.index,
-                }
-            )
+            # Search blocks are one-shot: repeat the item on `done` so parsers
+            # reading only `done` (this file's own included) keep the payload.
+            done_payload: dict[str, Any] = {"output_index": event.index}
+            stashed = search_items.pop(event.index, None)
+            if stashed is not None:
+                done_payload["item"] = stashed
+            yield _sse({"type": "response.output_item.done", **done_payload})
         elif isinstance(event, MessageDeltaEvent):
             status = (
                 "completed" if event.stop and event.stop.normalized == "end_turn" else "incomplete"

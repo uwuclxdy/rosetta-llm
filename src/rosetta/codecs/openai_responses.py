@@ -146,7 +146,8 @@ def _parse_tool_search_item(
     if item.get("type") == "tool_search_call":
         call_id = item.get("call_id") or f"srvtoolu_{uuid.uuid4().hex[:16]}"
         # Anthropic carries the search variant in the block name; Responses
-        # has no variant field, so the proxy re-emits `search_variant`.
+        # has no variant field, so the proxy honors `search_variant` from
+        # peer proxies and never emits it.
         name = (
             "tool_search_tool_bm25"
             if item.get("search_variant") == "bm25"
@@ -500,6 +501,8 @@ def render_request(ir: CanonicalRequest) -> dict[str, Any]:
 
     if ir.tools:
         body["tools"] = [_render_tool_definition(t) for t in ir.tools]
+        # Synthesized search entries default to regex; a bm25 preference cannot
+        # be known when the client deferred tools without naming a search tool.
         if any(t.deferred for t in ir.tools) and not any(t.kind == "search" for t in ir.tools):
             body["tools"].append({"type": "tool_search", "execution": "server"})
         body["tool_choice"] = _render_tool_choice(ir.tool_choice)
@@ -536,19 +539,17 @@ def _message_item(role: str, content: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _search_call_item(part: ServerToolUsePart) -> dict[str, Any]:
-    item: dict[str, Any] = {
+    # Responses has no variant field: the wire stays spec-clean and bm25
+    # degrades to regex across any responses hop. The variant lives in IR only
+    # (part.name); the parse side still honors `search_variant` when a peer
+    # proxy emits it.
+    return {
         "type": "tool_search_call",
         "execution": "server",
         "call_id": None,
         "status": "completed",
         "arguments": part.input,
     }
-    # Responses has no variant channel, so bm25 rides this extra field; a
-    # strict upstream may 400 on it, which is loud where dropping the field
-    # would silently collapse bm25 to regex.
-    if part.name == "tool_search_tool_bm25":
-        item["search_variant"] = "bm25"
-    return item
 
 
 def _render_tool_choice(tool_choice: Any) -> Any:
