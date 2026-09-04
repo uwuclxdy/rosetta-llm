@@ -92,6 +92,8 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                         f"server tool '{block.get('name', '')}' cannot be translated; "
                         "only tool search server tools are supported"
                     )
+                if btype == "web_search_tool_result":
+                    raise ValueError(f"block type '{btype}' cannot be translated")
                 if btype == "server_tool_use":
                     payload = {"input": block.get("input") or {}}
                 elif btype == "tool_search_tool_result":

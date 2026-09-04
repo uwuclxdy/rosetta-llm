@@ -151,7 +151,8 @@ async def parse(chunks: AsyncIterator[bytes]) -> AsyncIterator[CanonicalStreamEv
                     "response.output_item.done",
                 ):
                     idx = data.get("output_index", current_item_index)
-                    item = data.get("item") or added_items.pop(idx, None) or {}
+                    stashed = added_items.pop(idx, None)
+                    item = data.get("item") or stashed or {}
                     if item.get("type") in ("tool_search_call", "tool_search_output"):
                         execution = item.get("execution")
                         if execution == "client":

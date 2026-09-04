@@ -157,6 +157,8 @@ def _parse_content_block(
             f"server tool '{name}' cannot be translated; "
             "only tool search server tools are supported"
         )
+    if block_type == "web_search_tool_result":
+        raise ValueError(f"block type '{block_type}' cannot be translated")
     if block_type == "tool_search_tool_result":
         content = block.get("content") or {}
         references = content.get("tool_references") or []

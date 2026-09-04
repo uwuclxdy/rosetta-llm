@@ -868,3 +868,65 @@ async def test_stream_search_done_without_item_uses_added_payload() -> None:
     assert starts[1]["content"]["tool_references"] == [
         {"type": "tool_reference", "tool_name": "get_weather"}
     ]
+
+
+def test_web_search_tool_result_refuses_parse() -> None:
+    payload = {
+        "model": "x",
+        "max_tokens": 16,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_abc123",
+                        "content": [{"type": "text", "text": "result"}],
+                    }
+                ],
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="cannot be translated"):
+        ac.parse_request(payload)
+
+
+async def test_stream_web_search_tool_result_refuses_parse() -> None:
+    sse = (
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"x","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\n'
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_abc123","content":[]}}\n\n'
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
+    with pytest.raises(ValueError, match="cannot be translated"):
+        _ = [event async for event in ac_stream.parse(chunks())]
+
+
+async def test_stream_duplicate_done_does_not_duplicate_search_block() -> None:
+    sse = (
+        b'data: {"type":"response.created","response":{"id":"r1","model":"m1","status":"in_progress","output":[]}}\n\n'
+        b'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"tool_search_call","execution":"server","call_id":null,"status":"in_progress","arguments":{"pattern":"w"}}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"tool_search_call","execution":"server","call_id":null,"status":"completed","arguments":{"pattern":"w"}}}\n\n'
+        b'data: {"type":"response.output_item.done","output_index":0}\n\n'
+        b'data: {"type":"response.completed","response":{"id":"r1","model":"m1","status":"completed","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield sse
+
+    out = b"".join([event async for event in ac_stream.render(or_stream.parse(chunks()))])
+
+    starts: list[dict[str, Any]] = []
+    for block in out.split(b"\n\n"):
+        for line in block.split(b"\n"):
+            if not line.startswith(b"data: "):
+                continue
+            data = json.loads(line[6:])
+            if data.get("type") == "content_block_start":
+                starts.append(data["content_block"])
+
+    assert [s["type"] for s in starts] == ["server_tool_use"]
+    assert starts[0]["input"] == {"pattern": "w"}
