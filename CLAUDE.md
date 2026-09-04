@@ -6,7 +6,7 @@ Multi-format bidirectional LLM proxy. Translates between OpenAI Chat Completions
 
 ```bash
 uv sync                        # install deps + dev tools
-uv run pytest tests/ -q        # run tests (52)
+uv run pytest tests/ -q        # run tests (55)
 uv run ruff check src/ tests/  # lint
 uv run ruff format src/ tests/ # format
 uv run mypy src/rosetta        # type-check (strict mode)
@@ -76,7 +76,7 @@ On inference, the `claude-code/` prefix is stripped and the model resolves norma
 - **Output items**: message, function_call, reasoning, compaction.
 - **Reasoning**: `encrypted_content` + `id` round-trip via Anthropic signature. `summary` accepts concise/detailed/auto.
 - **Phase markers** (commentary/final_answer): preserved in `_raw`, emitted only when the source item had them.
-- **Tool search**: `tool_search_call` / `tool_search_output` items map to/from the anthropic search blocks, paired through a synthesized `srvtoolu_` id when `call_id` is null (server execution). Client/BYOT execution has no anthropic equivalent and is refused at parse with a translation error, never silently converted. The search variant (regex/bm25) lives in IR only, on the server-tool block name; Responses has no variant field of its own, so the wire stays spec-clean and bm25 degrades to regex across any responses hop (the parse side still honors `search_variant` from peer proxies). `defer_loading` on functions round-trips via the IR `deferred` flag; a `{"type":"tool_search","execution":"server"}` entry is synthesized when any tool is deferred and none is present (regex variant by default). `arguments` is a JSON object on this wire; a JSON string is rejected by validation (loud 400).
+- **Tool search**: `tool_search_call` / `tool_search_output` items map to/from the anthropic search blocks, paired through a synthesized `srvtoolu_` id when `call_id` is null (server execution). Client/BYOT execution has no anthropic equivalent and is refused with a translation error (search items at parse, `tools[]` entries at anthropic render), never silently converted. The search variant (regex/bm25) lives in IR only, on the server-tool block name; Responses has no variant field of its own, so the wire stays spec-clean and bm25 degrades to regex across any responses hop (the parse side still honors `search_variant` from peer proxies). `defer_loading` on functions round-trips via the IR `deferred` flag; a `{"type":"tool_search","execution":"server"}` entry is synthesized when any tool is deferred and none is present (regex variant by default). `arguments` is a JSON object on this wire; a JSON string is rejected by validation (loud 400).
 
 ### Pipeline
 - **Header forwarding**: `anthropic-beta`, `anthropic-version`, `x-claude-code-session-id` extracted from inbound request and forwarded to every upstream call.
@@ -127,4 +127,4 @@ Model id format: `<provider_key>/<model_name>` (e.g., `anthropic/claude-opus-4-7
 - `tests/codecs/test_roundtrip.py` — codec property tests: Anthropic round-trip, tool-use input as object, tool-result ordering, Chat→Anthropic tool-call ID preservation, reasoning lossless round-trip (encrypted_content+id via signature), response round-trip, unknown-param passthrough, max_tokens synthesis, streaming partial-JSON buffering.
 - `tests/test_e2e.py` — FastAPI TestClient + respx: health, models, count_tokens, Chat passthrough, Anthropic→Chat translation, unknown provider 400, upstream-error format matching, auth, stream passthrough.
 
-Run with: `uv run pytest tests/ -q` (52 tests, ~0.5s).
+Run with: `uv run pytest tests/ -q` (55 tests, ~0.5s).
